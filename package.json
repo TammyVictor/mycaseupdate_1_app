@@ -1,11 +1,18 @@
 {
   "name": "mycase-app",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Simple backend for case tracker",
   "main": "server.js",
+  "type": "module",
+
+  "engines": {
+    "node": "18.x"
+  },
+
   "scripts": {
     "start": "node server.js"
   },
+
   "dependencies": {
     "express": "^4.18.2"
   }
