@@ -1,123 +1,82 @@
-import { chromium } from "playwright";
-import { createClient } from "@supabase/supabase-js";
+import { chromium } from 'playwright';
+import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const EMAIL = process.env.MYCASE_EMAIL;
+const PASSWORD = process.env.MYCASE_PASSWORD;
 
-export async function checkCase() {
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+(async () => {
   console.log("🔍 Checking case (Playwright mode)...");
 
-  let browser;
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
 
   try {
-    browser = await chromium.launch({
-      headless: true
-    });
-
-    console.log("✅ Browser launched");
-
-    const page = await browser.newPage();
-
-    // 📡 Capture API responses
-    let capturedData = [];
-
-    page.on("response", async (response) => {
-      try {
-        const url = response.url();
-        const contentType = response.headers()["content-type"] || "";
-
-        if (
-          (url.includes("livewire") ||
-            url.includes("case") ||
-            url.includes("api")) &&
-          contentType.includes("application/json")
-        ) {
-          const data = await response.json();
-          console.log("📡 API HIT:", url);
-          capturedData.push(data);
-        }
-      } catch {}
-    });
-
-    // 🔐 LOGIN
+    // 1. Go to MyCase login
     console.log("➡️ Opening login page...");
-    await page.goto("https://mycase.rscafrica.org/login");
+    await page.goto('https://mycase.rscafrica.org/login', { waitUntil: 'networkidle' });
 
-    await page.fill('input[name="email"]', process.env.MYCASE_EMAIL);
-    await page.fill('input[name="password"]', process.env.MYCASE_PASSWORD);
-
-    console.log("✅ Credentials entered");
+    // 2. Fill login form
+    console.log("🔐 Logging in...");
+    await page.fill('input[type="email"]', EMAIL);
+    await page.fill('input[type="password"]', PASSWORD);
 
     await Promise.all([
-      page.click('button[type="submit"]'),
-      page.waitForLoadState("networkidle")
+      page.waitForNavigation(),
+      page.click('button[type="submit"]')
     ]);
 
     console.log("✅ Logged in");
 
-    // 📄 CASE PAGE
-    console.log("➡️ Opening case page...");
-    await page.goto("https://mycase.rscafrica.org/case-information");
+    // 3. Wait for dashboard
+    await page.waitForTimeout(5000);
 
-    await page.waitForTimeout(10000);
+    // 4. Capture API response
+    let caseData = null;
 
-    console.log("📡 Responses captured:", capturedData.length);
+    page.on('response', async (response) => {
+      const url = response.url();
 
-    // 🧠 Extract
-    let extracted = {
-      status: "Unknown",
-      documents: [],
-      steps: []
-    };
-
-    for (const item of capturedData) {
-      const text = JSON.stringify(item).toLowerCase();
-
-      if (text.includes("under review")) extracted.status = "Under Review";
-      if (text.includes("approved")) extracted.status = "Approved";
-
-      if (text.includes("document")) {
-        extracted.documents.push(text.slice(0, 200));
+      if (url.includes('/livewire/message')) {
+        try {
+          const json = await response.json();
+          console.log("📡 API HIT:", url);
+          caseData = JSON.stringify(json);
+        } catch {}
       }
+    });
 
-      if (text.includes("step")) {
-        extracted.steps.push(text.slice(0, 200));
-      }
-    }
+    // 5. Reload to trigger API
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(5000);
 
-    console.log("🧠 Extracted:", extracted);
-
-    // 📦 Get old
-    const { data: oldData } = await supabase
-      .from("cases")
-      .select("*")
-      .eq("case_number", "SF-10267383")
-      .single();
-
-    const oldStatus = oldData?.status;
-
-    if (extracted.status !== oldStatus) {
-      console.log("🚨 STATUS CHANGED:", extracted.status);
-
-      await supabase
-        .from("cases")
-        .update({
-          status: extracted.status,
-          raw_data: JSON.stringify(extracted)
-        })
-        .eq("case_number", "SF-10267383");
+    if (!caseData) {
+      console.log("⚠️ No API data captured");
     } else {
-      console.log("✅ No change");
+      console.log("✅ Data captured");
+
+      // 6. Save to Supabase
+      const { error } = await supabase
+        .from('cases')
+        .update({
+          raw_data: caseData,
+          updated_at: new Date().toISOString()
+        })
+        .eq('case_number', 'SF-10267383');
+
+      if (error) {
+        console.log("❌ Supabase error:", error.message);
+      } else {
+        console.log("💾 Saved to Supabase");
+      }
     }
 
   } catch (err) {
-    console.error("❌ ERROR:", err.message);
-  } finally {
-    if (browser) {
-      await browser.close();
-      console.log("🧹 Browser closed");
-    }
+    console.log("❌ ERROR:", err.message);
   }
-}
+
+  await browser.close();
+})();
