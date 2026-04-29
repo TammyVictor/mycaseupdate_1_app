@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ OpenAI setup
+// ✅ OpenAI setup (only used in PRO mode)
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -17,19 +17,40 @@ app.get("/", (req, res) => {
   res.send("Backend is live 🚀");
 });
 
-// ✅ AI route
+// ✅ AI route (FREE + PRO)
 app.post("/ai", async (req, res) => {
   try {
     console.log("AI endpoint hit:", req.body);
 
-    const { question, caseData } = req.body;
+    const { question, caseData, isPro } = req.body;
 
-    // Fallback if no question
+    // ❌ No question
     if (!question) {
       return res.json({ reply: "Please ask a question." });
     }
 
-    // Build prompt
+    // =========================
+    // 🟢 FREE MODE (no cost)
+    // =========================
+    if (!isPro) {
+      let reply = "Basic mode: limited response.";
+
+      if (question.toLowerCase().includes("status")) {
+        reply = `Your case (${caseData?.case_number || "Unknown"}) is currently ${caseData?.case_status || "Unknown"}.`;
+      } else if (question.toLowerCase().includes("review")) {
+        reply = "Under review means your case is being evaluated by immigration officers. This stage can take time depending on complexity.";
+      } else if (question.toLowerCase().includes("how long")) {
+        reply = "Processing times vary, but review stages can take weeks to months depending on your case.";
+      } else {
+        reply = "Upgrade to Pro for detailed AI answers.";
+      }
+
+      return res.json({ reply });
+    }
+
+    // =========================
+    // 🔵 PRO MODE (real AI)
+    // =========================
     const prompt = `
 You are a helpful case assistant.
 
@@ -39,10 +60,9 @@ Status: ${caseData?.case_status || "Unknown"}
 User question:
 ${question}
 
-Give a clear, helpful answer.
+Give a clear, helpful, human-like answer.
 `;
 
-    // Call OpenAI
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -59,7 +79,12 @@ Give a clear, helpful answer.
 
   } catch (err) {
     console.error("ERROR:", err);
-    res.status(500).json({ reply: "Server error" });
+
+    // 🔁 Fallback if AI fails (quota, etc.)
+    res.json({
+      reply:
+        "AI is temporarily unavailable. You are currently in basic mode. Please try again later or upgrade."
+    });
   }
 });
 
