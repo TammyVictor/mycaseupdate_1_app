@@ -7,7 +7,7 @@ const supabase = createClient(
 );
 
 export async function checkCase() {
-  console.log("🔍 Checking case...");
+  console.log("🔍 Checking case (API mode)...");
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -15,6 +15,33 @@ export async function checkCase() {
   });
 
   const page = await browser.newPage();
+
+  let capturedData = [];
+
+  // 🔥 LISTEN TO ALL NETWORK RESPONSES
+  page.on("response", async (response) => {
+    try {
+      const url = response.url();
+
+      // 🎯 Filter interesting requests
+      if (
+        url.includes("livewire") ||
+        url.includes("case") ||
+        url.includes("api")
+      ) {
+        const contentType = response.headers()["content-type"];
+
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+
+          console.log("📡 API HIT:", url);
+          capturedData.push(data);
+        }
+      }
+    } catch (err) {
+      // ignore parsing errors
+    }
+  });
 
   try {
     // 🔐 LOGIN
@@ -30,47 +57,68 @@ export async function checkCase() {
       page.waitForNavigation({ waitUntil: "networkidle2" })
     ]);
 
+    console.log("✅ Logged in");
+
     // 📄 GO TO CASE PAGE
     await page.goto("https://mycase.rscafrica.org/case-information", {
       waitUntil: "networkidle2"
     });
 
-    // ⏳ WAIT for dynamic content
-    await page.waitForTimeout(5000);
+    // ⏳ WAIT for async calls
+    await page.waitForTimeout(8000);
 
-    // 📊 EXTRACT TEXT FROM PAGE
-    const content = await page.evaluate(() => {
-      return document.body.innerText;
-    });
+    console.log("📡 Captured responses:", capturedData.length);
 
-    console.log("📄 Extracted content length:", content.length);
+    // 🔍 EXTRACT MEANINGFUL DATA
+    let extracted = {
+      status: "Unknown",
+      documents: [],
+      steps: []
+    };
 
-    // 🔎 FIND STATUS (basic example)
-    let status = "Unknown";
+    for (const item of capturedData) {
+      const text = JSON.stringify(item);
 
-    if (content.includes("Under Review")) status = "Under Review";
-    if (content.includes("Approved")) status = "Approved";
+      // 🧠 STATUS DETECTION
+      if (text.includes("Under Review")) extracted.status = "Under Review";
+      if (text.includes("Approved")) extracted.status = "Approved";
 
-    // 📦 GET LAST SAVED STATUS
-    const { data } = await supabase
+      // 📄 DOCUMENT DETECTION (basic pattern)
+      if (text.toLowerCase().includes("document")) {
+        extracted.documents.push(text.slice(0, 200));
+      }
+
+      // 📊 STEP DETECTION
+      if (text.toLowerCase().includes("step")) {
+        extracted.steps.push(text.slice(0, 200));
+      }
+    }
+
+    console.log("🧠 Extracted:", extracted);
+
+    // 📦 GET OLD DATA
+    const { data: oldData } = await supabase
       .from("cases")
       .select("*")
       .eq("case_number", "SF-10267383")
       .single();
 
-    const oldStatus = data?.status;
+    const oldStatus = oldData?.status;
 
-    // 🔁 COMPARE
-    if (status !== oldStatus) {
-      console.log("🚨 STATUS CHANGED:", status);
+    // 🔁 COMPARE STATUS
+    if (extracted.status !== oldStatus) {
+      console.log("🚨 STATUS CHANGED:", extracted.status);
 
       await supabase
         .from("cases")
-        .update({ status })
+        .update({
+          status: extracted.status,
+          raw_data: JSON.stringify(extracted)
+        })
         .eq("case_number", "SF-10267383");
 
-      // 🔔 SIMPLE ALERT (for now)
-      console.log(`📢 NEW STATUS: ${status}`);
+      // 🔔 ALERT (for now log)
+      console.log("📢 UPDATE:", extracted);
     } else {
       console.log("✅ No change");
     }
