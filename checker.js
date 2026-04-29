@@ -1,130 +1,97 @@
 import { chromium } from "playwright";
 
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 async function run() {
-  console.log("🔍 Checking case (Playwright mode)...");
+  console.log("🔍 Checking case...");
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  let apiData = [];
-
-  // -------------------------
-  // CAPTURE API RESPONSES
-  // -------------------------
-  page.on("response", async (response) => {
-    try {
-      const url = response.url();
-
-      if (
-        url.includes("api") ||
-        url.includes("case") ||
-        url.includes("livewire")
-      ) {
-        const text = await response.text();
-
-        if (text && text.length > 50) {
-          apiData.push({ url, body: text });
-        }
-      }
-    } catch {}
-  });
+  let extracted = {
+    case_number: null,
+    status: null,
+    size: null
+  };
 
   try {
-    // -------------------------
     // LOGIN
-    // -------------------------
-    console.log("🌐 Opening login page...");
-    await page.goto("https://mycase.rscafrica.org/login", {
-      waitUntil: "domcontentloaded",
-    });
+    await page.goto("https://mycase.rscafrica.org/login", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('input[type="email"]');
 
-    await page.waitForSelector('input[type="email"]', { timeout: 60000 });
-
-    console.log("🔑 Logging in...");
     await page.fill('input[type="email"]', process.env.MYCASE_EMAIL);
     await page.fill('input[type="password"]', process.env.MYCASE_PASSWORD);
 
     await Promise.all([
-      page.waitForNavigation({ waitUntil: "networkidle" }),
-      page.click('button[type="submit"]'),
+      page.waitForNavigation(),
+      page.click('button[type="submit"]')
     ]);
 
     console.log("✅ Logged in");
 
-    // -------------------------
-    // HANDLE NOTICE POPUP
-    // -------------------------
+    // ACCEPT POPUP
     try {
-      console.log("🧾 Checking for notice popup...");
-
       const buttons = await page.locator("button").all();
-
       for (const btn of buttons) {
         const text = await btn.innerText();
-
         if (text.toLowerCase().includes("accept")) {
-          console.log("✅ Clicking Accept...");
           await btn.click();
+          console.log("✅ Accepted notice");
           break;
         }
       }
+    } catch {}
 
-      await page.waitForTimeout(5000);
-    } catch {
-      console.log("ℹ️ No notice popup found");
-    }
+    await page.waitForTimeout(5000);
 
-    // -------------------------
     // OPEN CASE PAGE
-    // -------------------------
-    console.log("📂 Opening case page...");
     await page.goto("https://mycase.rscafrica.org/case-information", {
-      waitUntil: "networkidle",
+      waitUntil: "networkidle"
     });
 
-    await page.waitForTimeout(10000);
+    await page.waitForTimeout(8000);
 
-    // -------------------------
-    // API DATA
-    // -------------------------
-    if (apiData.length > 0) {
-      console.log(`📡 API DATA FOUND: ${apiData.length}`);
-
-      apiData.slice(0, 3).forEach((entry, i) => {
-        console.log(`\n--- API RESPONSE ${i + 1} ---`);
-        console.log("URL:", entry.url);
-        console.log(entry.body.substring(0, 1000));
-      });
-    } else {
-      console.log("⚠ No API data captured");
-    }
-
-    // -------------------------
-    // PAGE TEXT
-    // -------------------------
-    console.log("\n📄 Extracting visible text...");
+    // EXTRACT TEXT
     const text = await page.evaluate(() => document.body.innerText);
 
-    if (text && text.trim().length > 0) {
-      console.log("📄 PAGE TEXT FOUND:");
-      console.log(text.substring(0, 1500));
-    } else {
-      console.log("⚠ No visible text");
-    }
+    console.log("📄 Raw Text:");
+    console.log(text.substring(0, 500));
 
     // -------------------------
-    // HTML DATA (for hidden Livewire)
+    // PARSE DATA
     // -------------------------
-    console.log("\n🧠 Extracting HTML...");
-    const html = await page.content();
 
-    if (html && html.length > 1000) {
-      console.log("📦 RAW HTML DATA FOUND:");
-      console.log(html.substring(0, 2000));
-    } else {
-      console.log("⚠ No useful HTML detected");
-    }
+    const caseNumberMatch = text.match(/Case Number:\s*(SF-\d+)/);
+    const statusMatch = text.match(/Case Status:\s*([A-Za-z ]+)/);
+    const sizeMatch = text.match(/Case Size:\s*(\d+)/);
+
+    extracted.case_number = caseNumberMatch?.[1] || null;
+    extracted.status = statusMatch?.[1]?.trim() || null;
+    extracted.size = sizeMatch?.[1] || null;
+
+    console.log("🧠 Extracted:", extracted);
+
+    // -------------------------
+    // SAVE TO SUPABASE
+    // -------------------------
+
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/cases?case_number=eq.${extracted.case_number}`, {
+      method: "PATCH",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        status: extracted.status,
+        case_size: extracted.size,
+        updated_at: new Date().toISOString()
+      })
+    });
+
+    console.log("💾 Saved to Supabase:", response.status);
 
   } catch (err) {
     console.log("❌ ERROR:", err.message);
