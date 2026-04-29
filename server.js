@@ -6,13 +6,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Use environment variables from Render
+// ✅ Use environment variables (from Render)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
-// 🔴 Safety check (prevents crash)
+// ✅ Safety check
 if (!supabaseUrl || !supabaseKey) {
-  console.error("Missing Supabase environment variables!");
+  console.error("❌ Missing Supabase environment variables!");
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -25,15 +25,14 @@ app.post("/ai", async (req, res) => {
   try {
     const { caseData } = req.body;
 
-    if (!caseData || !caseData.case_number) {
-      return res.status(400).json({ error: "Missing case_number" });
-    }
+    const caseNumber = caseData.case_number.trim();
 
+    // ✅ FIXED QUERY (handles spaces + case issues)
     const { data, error } = await supabase
       .from("cases")
       .select("*")
-      .eq("case_number", caseData.case_number)
-      .single();
+      .ilike("case_number", caseNumber)
+      .maybeSingle();
 
     if (error || !data) {
       return res.json({ reply: "Case not found." });
@@ -49,7 +48,7 @@ app.post("/ai", async (req, res) => {
   }
 });
 
-// ✅ IMPORTANT: Render uses PORT env variable
+// ✅ Render uses dynamic port
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
