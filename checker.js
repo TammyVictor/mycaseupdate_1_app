@@ -9,30 +9,39 @@ async function run() {
 
   let apiData = [];
 
-  // Capture API responses
+  // -------------------------
+  // CAPTURE API RESPONSES
+  // -------------------------
   page.on("response", async (response) => {
     try {
       const url = response.url();
 
-      if (url.includes("api") || url.includes("case") || url.includes("livewire")) {
+      if (
+        url.includes("api") ||
+        url.includes("case") ||
+        url.includes("livewire")
+      ) {
         const text = await response.text();
-        apiData.push({ url, body: text });
+
+        if (text && text.length > 50) {
+          apiData.push({ url, body: text });
+        }
       }
     } catch {}
   });
 
   try {
-    // ✅ GO DIRECTLY TO LOGIN PAGE
+    // -------------------------
+    // LOGIN
+    // -------------------------
     console.log("🌐 Opening login page...");
     await page.goto("https://mycase.rscafrica.org/login", {
       waitUntil: "domcontentloaded",
     });
 
-    // ✅ WAIT FOR INPUTS PROPERLY
     await page.waitForSelector('input[type="email"]', { timeout: 60000 });
 
     console.log("🔑 Logging in...");
-
     await page.fill('input[type="email"]', process.env.MYCASE_EMAIL);
     await page.fill('input[type="password"]', process.env.MYCASE_PASSWORD);
 
@@ -43,10 +52,32 @@ async function run() {
 
     console.log("✅ Logged in");
 
-    // Wait for dynamic content
-    await page.waitForTimeout(10000);
+    // -------------------------
+    // HANDLE NOTICE POPUP
+    // -------------------------
+    try {
+      console.log("🧾 Checking for notice popup...");
 
-    // Go to case page
+      const buttons = await page.locator("button").all();
+
+      for (const btn of buttons) {
+        const text = await btn.innerText();
+
+        if (text.toLowerCase().includes("accept")) {
+          console.log("✅ Clicking Accept...");
+          await btn.click();
+          break;
+        }
+      }
+
+      await page.waitForTimeout(5000);
+    } catch {
+      console.log("ℹ️ No notice popup found");
+    }
+
+    // -------------------------
+    // OPEN CASE PAGE
+    // -------------------------
     console.log("📂 Opening case page...");
     await page.goto("https://mycase.rscafrica.org/case-information", {
       waitUntil: "networkidle",
@@ -59,37 +90,40 @@ async function run() {
     // -------------------------
     if (apiData.length > 0) {
       console.log(`📡 API DATA FOUND: ${apiData.length}`);
-      apiData.slice(0, 3).forEach((d, i) => {
-        console.log(`\n--- API ${i + 1} ---`);
-        console.log(d.url);
-        console.log(d.body.substring(0, 800));
+
+      apiData.slice(0, 3).forEach((entry, i) => {
+        console.log(`\n--- API RESPONSE ${i + 1} ---`);
+        console.log("URL:", entry.url);
+        console.log(entry.body.substring(0, 1000));
       });
     } else {
       console.log("⚠ No API data captured");
     }
 
     // -------------------------
-    // TEXT
+    // PAGE TEXT
     // -------------------------
-    console.log("\n📄 Extracting text...");
+    console.log("\n📄 Extracting visible text...");
     const text = await page.evaluate(() => document.body.innerText);
 
     if (text && text.trim().length > 0) {
+      console.log("📄 PAGE TEXT FOUND:");
       console.log(text.substring(0, 1500));
     } else {
       console.log("⚠ No visible text");
     }
 
     // -------------------------
-    // HTML
+    // HTML DATA (for hidden Livewire)
     // -------------------------
     console.log("\n🧠 Extracting HTML...");
     const html = await page.content();
 
-    if (html.length > 1000) {
+    if (html && html.length > 1000) {
+      console.log("📦 RAW HTML DATA FOUND:");
       console.log(html.substring(0, 2000));
     } else {
-      console.log("⚠ No useful HTML");
+      console.log("⚠ No useful HTML detected");
     }
 
   } catch (err) {
