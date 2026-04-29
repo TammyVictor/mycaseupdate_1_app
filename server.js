@@ -1,63 +1,88 @@
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
+import { checkCase } from "./checker.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ USE SERVICE ROLE KEY (NOT anon key)
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// 🔐 Supabase (SERVICE ROLE)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// 🔍 TEST ROUTE (to confirm backend is using correct key)
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error("Missing Supabase environment variables");
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// ✅ ROOT ROUTE (test backend)
 app.get("/", async (req, res) => {
-  const { data, error } = await supabase.from("cases").select("*");
+  try {
+    const { data, error } = await supabase.from("cases").select("*");
 
-  if (error) {
+    if (error) {
+      return res.json({
+        status: "ERROR",
+        message: error.message,
+      });
+    }
+
     return res.json({
-      status: "ERROR",
-      message: error.message,
+      status: "SUCCESS",
+      message: "Backend running 🚀",
+      rows_found: data.length,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  return res.json({
-    status: "SUCCESS",
-    message: "Backend connected using SERVICE ROLE key",
-    rows_found: data.length,
-  });
 });
 
-// 🎯 MAIN API ROUTE
+// 🤖 AI / CASE CHECK ENDPOINT
 app.post("/ai", async (req, res) => {
-  const case_number = req.body?.caseData?.case_number;
+  try {
+    const case_number = req.body?.caseData?.case_number;
 
-  if (!case_number) {
+    if (!case_number) {
+      return res.json({
+        reply: "Please provide a case number.",
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("cases")
+      .select("*")
+      .eq("case_number", case_number)
+      .single();
+
+    if (error || !data) {
+      return res.json({
+        reply: "Case not found.",
+      });
+    }
+
     return res.json({
-      reply: "Please provide a case number.",
+      reply: `Your case (${data.case_number}) is currently ${data.status}.`,
     });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
   }
-
-  const { data, error } = await supabase
-    .from("cases")
-    .select("*")
-    .eq("case_number", case_number)
-    .single();
-
-  if (error || !data) {
-    return res.json({
-      reply: "Case not found.",
-    });
-  }
-
-  return res.json({
-    reply: `Your case (${data.case_number}) is currently ${data.status}.`,
-  });
 });
 
+// 🔁 MANUAL TRIGGER FOR AUTO-CHECK
+app.get("/check", async (req, res) => {
+  try {
+    await checkCase();
+    res.send("Case check completed ✅");
+  } catch (err) {
+    res.status(500).send("Check failed ❌");
+  }
+});
+
+// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Running on port ${PORT}`);
 });
