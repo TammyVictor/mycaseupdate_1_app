@@ -1,4 +1,4 @@
-import puppeteer from "puppeteer-core";
+import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -7,31 +7,18 @@ const supabase = createClient(
 );
 
 export async function checkCase() {
-  console.log("🔍 Checking case (API mode)...");
+  console.log("🔍 Checking case (Playwright mode)...");
 
   let browser;
 
   try {
-    // 🚀 Launch Chromium (Render-compatible)
-    browser = await puppeteer.launch({
-      headless: true,
-      executablePath: "/usr/bin/chromium-browser",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu"
-      ]
+    browser = await chromium.launch({
+      headless: true
     });
 
     console.log("✅ Browser launched");
 
     const page = await browser.newPage();
-
-    // 👀 Log browser console messages
-    page.on("console", msg => {
-      console.log("🌐 PAGE LOG:", msg.text());
-    });
 
     // 📡 Capture API responses
     let capturedData = [];
@@ -48,56 +35,37 @@ export async function checkCase() {
           contentType.includes("application/json")
         ) {
           const data = await response.json();
-
           console.log("📡 API HIT:", url);
           capturedData.push(data);
         }
-      } catch (err) {
-        // ignore JSON parse errors
-      }
+      } catch {}
     });
 
-    // 🔐 STEP 1: Open login page
+    // 🔐 LOGIN
     console.log("➡️ Opening login page...");
-    await page.goto("https://mycase.rscafrica.org/login", {
-      waitUntil: "networkidle2",
-      timeout: 60000
-    });
+    await page.goto("https://mycase.rscafrica.org/login");
 
-    console.log("✅ Login page loaded");
-
-    // 🔐 STEP 2: Enter credentials
-    await page.waitForSelector('input[name="email"]', { timeout: 15000 });
-    await page.type('input[name="email"]', process.env.MYCASE_EMAIL);
-
-    await page.waitForSelector('input[name="password"]', { timeout: 15000 });
-    await page.type('input[name="password"]', process.env.MYCASE_PASSWORD);
+    await page.fill('input[name="email"]', process.env.MYCASE_EMAIL);
+    await page.fill('input[name="password"]', process.env.MYCASE_PASSWORD);
 
     console.log("✅ Credentials entered");
 
-    // 🔐 STEP 3: Submit login
     await Promise.all([
       page.click('button[type="submit"]'),
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 })
+      page.waitForLoadState("networkidle")
     ]);
 
     console.log("✅ Logged in");
 
-    // 📄 STEP 4: Open case page
+    // 📄 CASE PAGE
     console.log("➡️ Opening case page...");
-    await page.goto("https://mycase.rscafrica.org/case-information", {
-      waitUntil: "networkidle2",
-      timeout: 60000
-    });
+    await page.goto("https://mycase.rscafrica.org/case-information");
 
-    console.log("✅ Case page loaded");
-
-    // ⏳ Wait for API calls to finish
     await page.waitForTimeout(10000);
 
-    console.log("📡 Total API responses captured:", capturedData.length);
+    console.log("📡 Responses captured:", capturedData.length);
 
-    // 🧠 Extract useful info
+    // 🧠 Extract
     let extracted = {
       status: "Unknown",
       documents: [],
@@ -107,24 +75,21 @@ export async function checkCase() {
     for (const item of capturedData) {
       const text = JSON.stringify(item).toLowerCase();
 
-      // 🔎 Status detection
       if (text.includes("under review")) extracted.status = "Under Review";
       if (text.includes("approved")) extracted.status = "Approved";
 
-      // 📄 Documents detection
       if (text.includes("document")) {
         extracted.documents.push(text.slice(0, 200));
       }
 
-      // 📊 Steps detection
       if (text.includes("step")) {
         extracted.steps.push(text.slice(0, 200));
       }
     }
 
-    console.log("🧠 Extracted data:", extracted);
+    console.log("🧠 Extracted:", extracted);
 
-    // 📦 Get previous data
+    // 📦 Get old
     const { data: oldData } = await supabase
       .from("cases")
       .select("*")
@@ -133,7 +98,6 @@ export async function checkCase() {
 
     const oldStatus = oldData?.status;
 
-    // 🔁 Compare
     if (extracted.status !== oldStatus) {
       console.log("🚨 STATUS CHANGED:", extracted.status);
 
@@ -144,14 +108,12 @@ export async function checkCase() {
           raw_data: JSON.stringify(extracted)
         })
         .eq("case_number", "SF-10267383");
-
-      console.log("📢 UPDATE STORED");
     } else {
       console.log("✅ No change");
     }
 
   } catch (err) {
-    console.error("❌ ERROR STEP:", err.message);
+    console.error("❌ ERROR:", err.message);
   } finally {
     if (browser) {
       await browser.close();
