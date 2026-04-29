@@ -6,58 +6,58 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Use environment variables (already set in Render)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+// ✅ USE SERVICE ROLE KEY (NOT anon key)
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// ✅ Safety check
-if (!supabaseUrl || !supabaseKey) {
-  console.error("Missing Supabase environment variables!");
-}
+// 🔍 TEST ROUTE (to confirm backend is using correct key)
+app.get("/", async (req, res) => {
+  const { data, error } = await supabase.from("cases").select("*");
 
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Test route
-app.get("/", (req, res) => {
-  res.send("Backend is live 🚀");
-});
-
-// 🔥 FIXED AI ROUTE
-app.post("/ai", async (req, res) => {
-  try {
-    let { caseData } = req.body;
-
-    if (!caseData || !caseData.case_number) {
-      return res.json({ reply: "No case number provided." });
-    }
-
-    // ✅ Clean input (IMPORTANT)
-    const caseNumber = caseData.case_number.trim();
-
-    console.log("Searching for:", caseNumber);
-
-    // ✅ Use ilike (case-insensitive match)
-    const { data, error } = await supabase
-      .from("cases")
-      .select("*")
-      .ilike("case_number", caseNumber)
-      .single();
-
-    if (error || !data) {
-      console.log("Not found in DB");
-      return res.json({ reply: "Case not found." });
-    }
-
-    const reply = `Your case (${data.case_number}) is currently ${data.status}.`;
-
-    res.json({ reply });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+  if (error) {
+    return res.json({
+      status: "ERROR",
+      message: error.message,
+    });
   }
+
+  return res.json({
+    status: "SUCCESS",
+    message: "Backend connected using SERVICE ROLE key",
+    rows_found: data.length,
+  });
 });
 
-// ✅ Render requires dynamic port
+// 🎯 MAIN API ROUTE
+app.post("/ai", async (req, res) => {
+  const case_number = req.body?.caseData?.case_number;
+
+  if (!case_number) {
+    return res.json({
+      reply: "Please provide a case number.",
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("cases")
+    .select("*")
+    .eq("case_number", case_number)
+    .single();
+
+  if (error || !data) {
+    return res.json({
+      reply: "Case not found.",
+    });
+  }
+
+  return res.json({
+    reply: `Your case (${data.case_number}) is currently ${data.status}.`,
+  });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
