@@ -1,82 +1,88 @@
 import { chromium } from 'playwright';
-import { createClient } from '@supabase/supabase-js';
+import fetch from 'node-fetch';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const EMAIL = process.env.MYCASE_EMAIL;
-const PASSWORD = process.env.MYCASE_PASSWORD;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const MYCASE_EMAIL = process.env.MYCASE_EMAIL;
+const MYCASE_PASSWORD = process.env.MYCASE_PASSWORD;
 
-(async () => {
+async function run() {
   console.log("🔍 Checking case (Playwright mode)...");
 
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  const browser = await chromium.launch({
+    headless: true
+  });
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  let capturedData = null;
+
+  // ✅ LISTEN TO ALL NETWORK RESPONSES
+  page.on('response', async (response) => {
+    const url = response.url();
+
+    // 🔥 THIS IS THE KEY FIX
+    if (url.includes('/livewire/message') || url.includes('/api')) {
+      try {
+        const text = await response.text();
+
+        if (text && text.length > 50) {
+          console.log("📡 API response captured");
+
+          capturedData = text;
+        }
+      } catch (err) {
+        console.log("⚠️ Error reading response");
+      }
+    }
+  });
 
   try {
-    // 1. Go to MyCase login
-    console.log("➡️ Opening login page...");
-    await page.goto('https://mycase.rscafrica.org/login', { waitUntil: 'networkidle' });
+    console.log("🌐 Opening login page...");
+    await page.goto('https://mycase.rscafrica.org/login', { waitUntil: 'domcontentloaded' });
 
-    // 2. Fill login form
-    console.log("🔐 Logging in...");
-    await page.fill('input[type="email"]', EMAIL);
-    await page.fill('input[type="password"]', PASSWORD);
+    console.log("🔑 Logging in...");
+    await page.fill('input[type="email"]', MYCASE_EMAIL);
+    await page.fill('input[type="password"]', MYCASE_PASSWORD);
 
     await Promise.all([
-      page.waitForNavigation(),
-      page.click('button[type="submit"]')
+      page.click('button[type="submit"]'),
+      page.waitForNavigation()
     ]);
 
     console.log("✅ Logged in");
 
-    // 3. Wait for dashboard
-    await page.waitForTimeout(5000);
+    // ⏳ IMPORTANT: give time for background API calls
+    await page.waitForTimeout(15000);
 
-    // 4. Capture API response
-    let caseData = null;
-
-    page.on('response', async (response) => {
-      const url = response.url();
-
-      if (url.includes('/livewire/message')) {
-        try {
-          const json = await response.json();
-          console.log("📡 API HIT:", url);
-          caseData = JSON.stringify(json);
-        } catch {}
-      }
-    });
-
-    // 5. Reload to trigger API
-    await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForTimeout(5000);
-
-    if (!caseData) {
+    if (!capturedData) {
       console.log("⚠️ No API data captured");
     } else {
-      console.log("✅ Data captured");
+      console.log("✅ Data captured, saving...");
 
-      // 6. Save to Supabase
-      const { error } = await supabase
-        .from('cases')
-        .update({
-          raw_data: caseData,
+      await fetch(`${SUPABASE_URL}/rest/v1/cases`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          raw_data: capturedData,
           updated_at: new Date().toISOString()
         })
-        .eq('case_number', 'SF-10267383');
+      });
 
-      if (error) {
-        console.log("❌ Supabase error:", error.message);
-      } else {
-        console.log("💾 Saved to Supabase");
-      }
+      console.log("💾 Saved to Supabase");
     }
 
   } catch (err) {
-    console.log("❌ ERROR:", err.message);
+    console.error("❌ ERROR STEP:", err.message);
   }
 
   await browser.close();
-})();
+}
+
+run();
