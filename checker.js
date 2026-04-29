@@ -1,10 +1,4 @@
-import { chromium } from 'playwright';
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const MYCASE_EMAIL = process.env.MYCASE_EMAIL;
-const MYCASE_PASSWORD = process.env.MYCASE_PASSWORD;
+import { chromium } from "playwright";
 
 async function run() {
   console.log("🔍 Checking case (Playwright mode)...");
@@ -16,69 +10,97 @@ async function run() {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  let capturedData = null;
+  let apiData = [];
 
-  // ✅ LISTEN TO ALL NETWORK RESPONSES
-  page.on('response', async (response) => {
-    const url = response.url();
+  // Capture API responses
+  page.on("response", async (response) => {
+    try {
+      const url = response.url();
 
-    // 🔥 THIS IS THE KEY FIX
-    if (url.includes('/livewire/message') || url.includes('/api')) {
-      try {
+      if (url.includes("api") || url.includes("case") || url.includes("livewire")) {
         const text = await response.text();
 
-        if (text && text.length > 50) {
-          console.log("📡 API response captured");
-
-          capturedData = text;
-        }
-      } catch (err) {
-        console.log("⚠️ Error reading response");
+        apiData.push({
+          url,
+          body: text
+        });
       }
+    } catch (err) {
+      // ignore
     }
   });
 
   try {
     console.log("🌐 Opening login page...");
-    await page.goto('https://mycase.rscafrica.org/login', { waitUntil: 'domcontentloaded' });
+    await page.goto("https://mycase.rscafrica.org", { waitUntil: "networkidle" });
 
     console.log("🔑 Logging in...");
-    await page.fill('input[type="email"]', MYCASE_EMAIL);
-    await page.fill('input[type="password"]', MYCASE_PASSWORD);
+
+    await page.fill('input[type="email"]', process.env.MYCASE_EMAIL);
+    await page.fill('input[type="password"]', process.env.MYCASE_PASSWORD);
 
     await Promise.all([
-      page.click('button[type="submit"]'),
-      page.waitForNavigation()
+      page.waitForNavigation({ waitUntil: "networkidle" }),
+      page.click('button[type="submit"]')
     ]);
 
     console.log("✅ Logged in");
 
-    // ⏳ IMPORTANT: give time for background API calls
-    await page.waitForTimeout(15000);
+    // Wait for dynamic content
+    await page.waitForTimeout(8000);
 
-    if (!capturedData) {
-      console.log("⚠️ No API data captured");
-    } else {
-      console.log("✅ Data captured, saving...");
+    // Go to case page explicitly (important)
+    await page.goto("https://mycase.rscafrica.org/case-information", {
+      waitUntil: "networkidle"
+    });
 
-      await fetch(`${SUPABASE_URL}/rest/v1/cases`, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          raw_data: capturedData,
-          updated_at: new Date().toISOString()
-        })
+    await page.waitForTimeout(8000);
+
+    // -------------------------
+    // 1. API DATA CHECK
+    // -------------------------
+    if (apiData.length > 0) {
+      console.log(`📡 API DATA FOUND: ${apiData.length} responses`);
+
+      apiData.slice(0, 3).forEach((entry, i) => {
+        console.log(`\n--- API RESPONSE ${i + 1} ---`);
+        console.log("URL:", entry.url);
+        console.log(entry.body.substring(0, 1000));
       });
-
-      console.log("💾 Saved to Supabase");
+    } else {
+      console.log("⚠ No API data captured");
     }
 
-  } catch (err) {
-    console.error("❌ ERROR STEP:", err.message);
+    // -------------------------
+    // 2. EXTRACT PAGE TEXT
+    // -------------------------
+    console.log("\n📄 Extracting visible text...");
+
+    const text = await page.evaluate(() => document.body.innerText);
+
+    if (text && text.trim().length > 0) {
+      console.log("📄 PAGE TEXT FOUND:");
+      console.log(text.substring(0, 1500));
+    } else {
+      console.log("⚠ No visible text");
+    }
+
+    // -------------------------
+    // 3. EXTRACT FULL HTML
+    // -------------------------
+    console.log("\n🧠 Extracting HTML...");
+
+    const html = await page.content();
+
+    if (html.includes("livewire") || html.includes("case") || html.length > 1000) {
+      console.log("📦 RAW HTML DATA FOUND:");
+      console.log(html.substring(0, 2000));
+    } else {
+      console.log("⚠ No useful HTML detected");
+    }
+
+  } catch (error) {
+    console.log("❌ ERROR:", error.message);
   }
 
   await browser.close();
